@@ -590,9 +590,7 @@ This file contains the complete, self-contained single-page web application (`da
       <div class="grid">
         <div class="card">
           <h2>Wi-Fi Configuration</h2>
-          <div style="margin-bottom:10px;">
-            <button class="btn secondary sm" onclick="scanWifi()">Scan Networks</button>
-          </div>
+          <p style="font-size:0.83rem;color:var(--text-muted);margin-top:0;">Enter your 2.4 GHz home Wi-Fi name and password below.</p>
           <div style="margin-bottom:12px;">
             <label>Wi-Fi SSID</label>
             <input type="text" id="wifiSsid" placeholder="Home Wi-Fi Name" />
@@ -714,7 +712,7 @@ This file contains the complete, self-contained single-page web application (`da
       const el = document.getElementById("toast");
       el.textContent = msg;
       el.classList.add("show");
-      setTimeout(() => el.classList.remove("show"), 2400);
+      setTimeout(() => el.classList.remove("show"), 4500);
     }
 
     // Navigation
@@ -1045,15 +1043,24 @@ This file contains the complete, self-contained single-page web application (`da
     }
 
     async function saveWifi() {
-      await fetch("/api/v1/wifi", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ssid: document.getElementById("wifiSsid").value,
-          password: document.getElementById("wifiPass").value
-        })
-      });
-      toast("Wi-Fi saved, rebooting...");
+      toast("Testing Wi-Fi connection...");
+      try {
+        const res = await fetch("/api/v1/wifi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ssid: document.getElementById("wifiSsid").value,
+            password: document.getElementById("wifiPass").value
+          })
+        });
+        const data = await res.json();
+        toast(data.message || "Wi-Fi updated");
+        if (data.connected && data.ip) {
+          document.getElementById("sysIp").textContent = data.ip;
+        }
+      } catch (_) {
+        toast("Connection error");
+      }
     }
 
     async function saveMqtt() {

@@ -182,6 +182,11 @@ struct SystemConfig {
     char           mqtt_user[32];
     char           mqtt_pass[64];
     bool           mqtt_en;
+    char           wifi_ssid[32];
+    char           wifi_pass[64];
+    char           hostname[32];
+    char           mqtt_base_topic[32];
+    bool           ha_discovery;    
 };
 
 struct SystemState {
@@ -204,10 +209,17 @@ struct SystemState {
     float         peak_post_heat_temp;
     bool          tracking_overshoot;
     SensorRuntime sensors[MAX_SENSORS + 1];
+    bool          setup_ap_active;
+    uint32_t      setup_ap_until_ms;
+    int8_t        last_paired_id;
+    char          lockout_reason[32];
 };
 
 extern SystemConfig g_config;
 extern SystemState  g_state;
+
+#include <freertos/semphr.h>
+extern SemaphoreHandle_t g_mutex;
 
 void saveConfigToNVS();
 void loadConfigFromNVS();
@@ -547,6 +559,7 @@ extern LcdUI g_lcd;
 #include "control_engine.h"
 #include <U8g2lib.h>
 #include <WiFi.h>
+#include "network_manager.h"
 
 LcdUI g_lcd;
 U8G2_ST7567_ENH_DG128064I_F_4W_HW_SPI u8g2(U8G2_R0, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
@@ -597,9 +610,25 @@ void LcdUI::loop(uint32_t now_epoch, const struct tm& timeinfo) {
                 saveConfigToNVS();
             }
         } else if (digitalRead(PIN_BTN_BACK) == LOW) {
+            uint32_t press_start = millis();
+            bool long_pressed = false;
+            while (digitalRead(PIN_BTN_BACK) == LOW) {
+                if (!long_pressed && (millis() - press_start >= 3000)) {
+                    long_pressed = true;
+                    last_input_ms = millis();
+                    if (g_state.setup_ap_active) {
+                        networkStopSetupAP();
+                    } else {
+                        networkStartSetupAP(600); // 10 λεπτά
+                    }
+                }
+                delay(15);
+            }
             last_btn_ms = millis();
             last_input_ms = millis();
-            current_screen = (current_screen + 1) % 4;
+            if (!long_pressed) {
+                current_screen = (current_screen + 1) % 4;
+            }
         }
     }
 
@@ -620,7 +649,11 @@ void LcdUI::renderMainScreen(const struct tm& timeinfo) {
     u8g2.setFont(u8g2_font_6x10_tr);
     const char* mode_names[] = {"AUTO", "MANUAL", "BOOST", "OFF"};
     char header[32];
-    snprintf(header, sizeof(header), "%02d:%02d  [%s]", timeinfo.tm_hour, timeinfo.tm_min, mode_names[g_state.mode]);
+    if (g_state.setup_ap_active) {
+        snprintf(header, sizeof(header), "AP: 192.168.4.1");
+    } else {
+        snprintf(header, sizeof(header), "%02d:%02d  [%s]", timeinfo.tm_hour, timeinfo.tm_min, mode_names[g_state.mode]);
+    }
     u8g2.drawStr(0, 9, header);
     if (g_state.heating_active) u8g2.drawStr(104, 9, "HEAT");
     u8g2.drawHLine(0, 12, 128);
@@ -720,6 +753,8 @@ void LcdUI::renderNetworkScreen() {
 SystemConfig g_config;
 SystemState  g_state;
 
+SemaphoreHandle_t g_mutex = nullptr;
+
 Preferences    prefs;
 Adafruit_SHT4x sht4;
 RTC_DS3231     rtc;
@@ -802,9 +837,10 @@ void setup() {
     }
     rtc_ok = rtc.begin();
 
+    g_mutex = xSemaphoreCreateMutex();
     g_control.begin();
     g_lcd.begin();
-    g_network.begin();
+    networkInit();
 }
 
 void loop() {
@@ -836,7 +872,7 @@ void loop() {
         }
 
         g_control.evaluate(now_epoch, timeinfo);
-        g_network.loop(now_epoch);
+        networkLoop();
     }
 
     g_lcd.loop(now_epoch, timeinfo);

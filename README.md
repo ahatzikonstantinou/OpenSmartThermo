@@ -18,6 +18,10 @@ OpenSmartThermo is a complete, cloud-free smart heating controller and multi-roo
 * **Smart Weekly Scheduler & Multi-Sensor Aggregation:** 7-day × 6-slot schedule with empty-by-default (`--:--`) entries, strict chronological filtering, per-slot room overrides, and `Single`, `Average`, `Weighted`, `Min`, or `Max` indoor sensor aggregation.
 * **Continuous Year-Round Operation (Summer Mode):** Setting the thermostat to `OFF` disables only the heating relay (retaining frost protection `< 6.0°C`); Wi-Fi, ESP-NOW, LCD, Web UI, REST API, and MQTT remain active 24/7.
 * **Responsive Smartphone & Desktop Web UI:** Self-contained SPA served from `ESP32-S3` LittleFS with automatic Google Material 3 Light / Dark Slate mode, WebSocket live updates, and a fixed mobile bottom navigation bar.
+* **On-Demand Captive Portal Wi-Fi Setup (`OpenSmartThermo-Setup`):**
+  * Automatically launches an open `WIFI_AP_STA` hotspot (`OpenSmartThermo-Setup` at `192.168.4.1`) with an integrated DNS Captive Portal for 10 minutes on first boot or if the home router is unreachable after 20 seconds.
+  * Can be toggled ON/OFF anytime by holding the **`BACK`** button (`GPIO 38`) on the wall thermostat for **3 seconds** (LCD top-left status bar displays `AP: 192.168.4.1`).
+  * Performs live non-destructive credential verification (`Connected! IP: x.x.x.x` or `Connection failed. Check password.`) before closing the setup hotspot after 5 seconds.
 
 ---
 
@@ -145,7 +149,8 @@ pio run --target uploadfs
 # 2. Compile and upload the ESP32-S3 firmware
 pio run --target upload
 ```
-* **First-Time Wi-Fi Setup:** Connect your smartphone or PC to the **`OpenSmartThermo-Setup`** Wi-Fi hotspot, open `http://192.168.4.1`, enter your home Wi-Fi credentials, and reboot. Afterward, access the Web UI at `http://opensmartthermo.local`.
+* **First-Time Wi-Fi Setup & 3-Second `BACK` Shortcut:** On first power-up (or anytime by holding the **`BACK`** button on the wall thermostat for **3 seconds** until the status bar shows **`AP: 192.168.4.1`**), connect your smartphone or PC to wifi with SSID **`OpenSmartThermo-Setup`**. Your browser opens the Web SPA automatically via DNS Captive Portal (or browse to `http://192.168.4.1`). Enter your home Wi-Fi credentials on the **Network** tab; the Hub verifies the connection live, displays its assigned LAN IP, and closes the setup hotspot 5 seconds later. Afterward, access the Web UI at `http://opensmartthermo.local`.
+
 
 ### 2. Flash the Wireless Sensor Nodes (`Seeed Studio XIAO ESP32C3`)
 Attach the external `U.FL` antenna, open `2_Wireless_Node_XIAO_ESP32C3/` in VS Code / PlatformIO, and run:

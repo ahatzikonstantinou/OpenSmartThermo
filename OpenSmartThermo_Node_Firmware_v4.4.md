@@ -90,26 +90,26 @@ lib_deps =
 // ESP-NOW PACKET STRUCTURES (Must match ESP32-S3 Hub v4.4 exactly)
 // ============================================================================
 typedef struct __attribute__((packed)) {
-    uint8_t  msg_type;          // 0x01 = TELEMETRY, 0x02 = PAIR_REQUEST
-    uint8_t  sensor_id;         // 0xFF if unpaired, 1..15 if paired
-    uint8_t  mac[6];            // Sender STA MAC address
-    int16_t  temp_x100;         // Temperature in 0.01 C
-    uint16_t hum_x100;          // Humidity in 0.01 %RH
-    uint16_t vbat_mv;           // Battery voltage in mV
-    uint8_t  wake_reason;       // 0 = Timer, 1 = Physical Button
-    uint32_t seq_num;           // Monotonic packet counter
+    uint8_t  msg_type;        // 0x01 = TELEMETRY, 0x02 = PAIR_REQUEST
+    uint8_t  sensor_id;       // 0 = unpaired, 1..15 = assigned ID
+    float    temp_c;
+    float    humidity_pct;
+    uint16_t batt_mv;
+    uint8_t  batt_pct;
+    uint8_t  wake_reason;     // 0 = timer, 1 = button
+    uint32_t seq_num;
+    uint8_t  reserved[6];
 } espnow_sensor_packet_t;
 
 typedef struct __attribute__((packed)) {
-    uint8_t  msg_type;          // 0x81 = TELEMETRY_ACK, 0x82 = PAIR_ACCEPT
-    uint8_t  assigned_id;       // Assigned Sensor ID (1..15)
-    uint8_t  wifi_channel;      // Current Hub Wi-Fi channel (1..13)
-    uint16_t report_interval;   // Sleep duration in seconds
-    int16_t  temp_offset_x100;  // Calibration offset in 0.01 C
-    uint8_t  ota_flag;          // Reserved for future maintenance
-    uint8_t  display_timeout_s; // Auto-off screen duration (5..10s)
-    char     sensor_name[25];   // Custom Sensor Name (up to 24 chars + null)
-    char     hub_name[25];      // Thermostat Hub Name (up to 24 chars + null)
+    uint8_t  msg_type;          // 0x81 = TELEMETRY_ACK, 0x82 = PAIR_ACK
+    uint8_t  assigned_id;       // 1..15
+    uint8_t  wifi_channel;      // Active Wi-Fi channel (1..13)
+    uint16_t report_interval_s; // Wake interval in seconds (default 300)
+    float    cal_offset_c;      // Temperature calibration offset
+    uint8_t  display_timeout_s; // LCD screen-on duration (5..10s)
+    char     sensor_name[25];   // Null-terminated custom sensor name
+    char     hub_name[21];      // Null-terminated hub name
 } espnow_hub_ack_t;
 
 // ============================================================================
@@ -162,7 +162,7 @@ void loadConfigFromNVS() {
     rtc_report_interval_s = prefs.getUShort("intv", DEFAULT_INTERVAL_S);
     rtc_temp_offset_x100  = prefs.getShort("offs", 0);
     rtc_display_timeout_s = prefs.getUChar("tout", DEFAULT_TIMEOUT_S);
-    if (rtc_display_timeout_s < 5 || rtc_display_timeout_s > 10) {
+    if (rtc_display_timeout_s < 3 || rtc_display_timeout_s > 30) {
         rtc_display_timeout_s = DEFAULT_TIMEOUT_S;
     }
     prefs.getBytes("hmac", rtc_hub_mac, 6);
@@ -287,27 +287,28 @@ void applyAckConfiguration() {
         rtc_wifi_channel = last_ack.wifi_channel;
         changed = true;
     }
-    if (last_ack.report_interval >= 60 && last_ack.report_interval <= 3600 &&
-        rtc_report_interval_s != last_ack.report_interval) {
-        rtc_report_interval_s = last_ack.report_interval;
+    if (last_ack.report_interval_s >= 60 && last_ack.report_interval_s <= 3600 &&
+        rtc_report_interval_s != last_ack.report_interval_s) {
+        rtc_report_interval_s = last_ack.report_interval_s;
         changed = true;
     }
-    if (rtc_temp_offset_x100 != last_ack.temp_offset_x100) {
-        rtc_temp_offset_x100 = last_ack.temp_offset_x100;
+    int16_t new_offs_x100 = (int16_t)roundf(last_ack.cal_offset_c * 100.0f);
+    if (rtc_temp_offset_x100 != new_offs_x100) {
+        rtc_temp_offset_x100 = new_offs_x100;
         changed = true;
     }
-    if (last_ack.display_timeout_s >= 5 && last_ack.display_timeout_s <= 10 &&
+    if (last_ack.display_timeout_s >= 3 && last_ack.display_timeout_s <= 30 &&
         rtc_display_timeout_s != last_ack.display_timeout_s) {
         rtc_display_timeout_s = last_ack.display_timeout_s;
         changed = true;
     }
 
     char clean_sname[25];
-    char clean_hname[25];
+    char clean_hname[21];
     strncpy(clean_sname, last_ack.sensor_name, 24);
     clean_sname[24] = '\0';
-    strncpy(clean_hname, last_ack.hub_name, 24);
-    clean_hname[24] = '\0';
+    strncpy(clean_hname, last_ack.hub_name, 20);
+    clean_hname[20] = '\0';
 
     if (strlen(clean_sname) > 0 && strcmp(rtc_sensor_name, clean_sname) != 0) {
         strncpy(rtc_sensor_name, clean_sname, 25);
@@ -332,14 +333,14 @@ bool sendTelemetryAndAwaitAck(uint8_t wake_reason) {
     initEspNow(rtc_wifi_channel);
 
     espnow_sensor_packet_t pkt = {};
-    pkt.msg_type    = MSG_TELEMETRY;
-    pkt.sensor_id   = rtc_sensor_id;
-    WiFi.macAddress(pkt.mac);
-    pkt.temp_x100   = (int16_t)roundf(cur_temp_c * 100.0f);
-    pkt.hum_x100    = (uint16_t)roundf(cur_hum_rh * 100.0f);
-    pkt.vbat_mv     = cur_vbat_mv;
-    pkt.wake_reason = wake_reason;
-    pkt.seq_num     = ++rtc_seq_num;
+    pkt.msg_type     = MSG_TELEMETRY;
+    pkt.sensor_id    = rtc_sensor_id;
+    pkt.temp_c       = cur_temp_c;
+    pkt.humidity_pct = cur_hum_rh;
+    pkt.batt_mv      = cur_vbat_mv;
+    pkt.batt_pct     = cur_bat_pct;
+    pkt.wake_reason  = wake_reason;
+    pkt.seq_num      = ++rtc_seq_num;
 
     ack_received = false;
     esp_now_send(rtc_hub_mac, (uint8_t *)&pkt, sizeof(pkt));
@@ -517,13 +518,13 @@ void runPairingMode() {
     uint32_t last_tx_ms = 0;
 
     espnow_sensor_packet_t pkt = {};
-    pkt.msg_type    = MSG_PAIR_REQUEST;
-    pkt.sensor_id   = rtc_is_paired ? rtc_sensor_id : 0xFF;
-    WiFi.macAddress(pkt.mac);
-    pkt.temp_x100   = (int16_t)roundf(cur_temp_c * 100.0f);
-    pkt.hum_x100    = (uint16_t)roundf(cur_hum_rh * 100.0f);
-    pkt.vbat_mv     = cur_vbat_mv;
-    pkt.wake_reason = 1;
+    pkt.msg_type     = MSG_PAIR_REQUEST;
+    pkt.sensor_id    = rtc_is_paired ? rtc_sensor_id : 0;
+    pkt.temp_c       = cur_temp_c;
+    pkt.humidity_pct = cur_hum_rh;
+    pkt.batt_mv      = cur_vbat_mv;
+    pkt.batt_pct     = cur_bat_pct;
+    pkt.wake_reason  = 1;
 
     ack_received = false;
 

@@ -79,8 +79,11 @@ OpenSmartThermo_Firmware/
 ### Step 5: Verify Hub Boot & Initial Wi-Fi Setup
 - [ ] Open the Serial Monitor at `115200 baud` (`pio device monitor`) and verify that `SHT40`, `DS3231 RTC`, `ST7567 LCD`, `LittleFS`, and `ESP-NOW` initialize without errors.
 - [ ] Confirm the `128x64 ST7567 LCD` illuminates and renders the Home Screen (`Screen 0`).
-- [ ] On a smartphone or PC, connect to the **`OpenSmartThermo-Setup`** Wi-Fi access point, navigate to `http://192.168.4.1`, enter your home Wi-Fi SSID and password, and click **Save & Connect**.
-- [ ] Once connected to your home network, open `http://opensmartthermo.local` (or the IP address shown on LCD `Screen 7`) and verify the 6-page Web SPA loads cleanly.
+- [ ] **First-Boot Captive Portal Verification:** With blank NVS (or erased flash), confirm the LCD top-left status bar displays **`AP: 192.168.4.1`** and broadcasts wifi with SSID **`OpenSmartThermo-Setup`**.
+- [ ] **Smartphone DNS Auto-Popup:** Connect a smartphone to wifi with SSID **`OpenSmartThermo-Setup`** and verify the Web SPA opens automatically via DNS Captive Portal (or manually via `http://192.168.4.1`).
+- [ ] **Live Wi-Fi Credential Verification:** Submit an incorrect password on the **Network** tab and confirm the Setup AP remains active with an error toast (`Connection failed. Check password.`); then submit valid credentials and confirm the LAN IP toast appears (`Connected! IP: x.x.x.x`) before the Setup AP closes after 5 seconds.
+- [ ] **3-Second `BACK` Button Shortcut & LAN Access:** On the Home Screen (`Screen 0`), hold **`BACK`** (`GPIO 38`) for **3 seconds** and verify **`AP: 192.168.4.1`** toggles ON; hold **`BACK`** for **3 seconds** again and verify it closes cleanly. Finally, open `http://opensmartthermo.local` (or the LAN IP on LCD `Screen 7`) and verify the 6-page Web SPA loads cleanly.
+
 
 ---
 

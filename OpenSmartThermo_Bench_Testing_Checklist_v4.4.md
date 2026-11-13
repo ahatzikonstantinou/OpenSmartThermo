@@ -55,11 +55,12 @@
 
 ### 3.2 LCD Screen, Backlight & 4-Button Navigation
 1. Confirm **Screen 0 (Home Screen)** renders crisp text without flickering or inverted contrast.
-2. Press **`BACK`** to verify the LED backlight wakes up and dims automatically after inactivity.
+2. Short-press **`BACK`** (`GPIO 38`) to verify the LED backlight wakes up and dims automatically after inactivity.
 3. Test all 4 tactile buttons (`UP`, `DOWN`, `OK`, `BACK`):
    * Short-press `UP` / `DOWN` on Screen 0 -> target temperature increments/decrements by `0.5°C`.
    * Short-press `OK` on Screen 0 -> cycles `AUTO` -> `MANUAL` -> `BOOST` -> `OFF`.
-   * Hold `OK` (`1.5s`) -> opens **Main Menu (Screen 1)**; press `BACK` -> immediately returns to **Screen 0**.
+   * Hold `OK` (`1.5s`) -> opens **Main Menu (Screen 1)**; short-press `BACK` -> immediately returns to **Screen 0**.
+   * Hold `BACK` (`>= 3.0s`) on **Screen 0** -> toggles the **`OpenSmartThermo-Setup`** Wi-Fi Access Point (`192.168.4.1`) ON for 10 minutes (top-left status bar displays **`AP: 192.168.4.1`**); hold `BACK` (`>= 3.0s`) again -> closes the Setup AP immediately.
 
 ### 3.3 Dry-Contact Relay Actuation & Anti-Short-Cycle Guard
 1. Set thermostat mode to **`MANUAL`** and raise target temperature `2.0°C` above room temperature.
@@ -76,6 +77,16 @@
 3. Wait up to **`60 seconds`**:
    * Expected: The `TPL5010` triggers a hardware reset on `ESP32-S3 EN`, immediately de-energizing the relay (`COM`–`NO` opens to `OL`) and rebooting the thermostat cleanly.
 4. Reconnect the `GPIO 17` jumper wire after verification.
+
+### 3.5 On-Demand Setup AP, DNS Captive Portal & Live Wi-Fi Verification
+1. **Trigger Setup AP:** Either boot with blank NVS or hold **`BACK`** (`GPIO 38`) for **3 seconds** on Screen 0 until the top-left status bar displays **`AP: 192.168.4.1`**.
+2. **Verify DNS Captive Portal Auto-Popup:** Connect a smartphone to the open **`OpenSmartThermo-Setup`** Wi-Fi network.
+   * Expected: The phone's Captive Portal browser opens the OpenSmartThermo Web SPA automatically (or loads cleanly at `http://192.168.4.1`) with zero external internet connection.
+3. **Verify Non-Destructive Live Wi-Fi Verification:**
+   * Navigate to the **Network** tab and submit an **incorrect** Wi-Fi password.
+   * Expected: After a short check (`<= 12s`), an error toast (`Connection failed. Check password.`) appears and **`OpenSmartThermo-Setup` remains active** so you are not locked out.
+   * Submit your **valid** home Wi-Fi SSID and password.
+   * Expected: A success toast (`Connected! IP: <LAN_IP>`) displays the assigned router IP address, and the Setup AP shuts down gracefully **5 seconds** later.
 
 ---
 
@@ -133,3 +144,5 @@
 | **CHK-06** | Wireless node deep-sleep current (`3V3` pin) | `15 µA – 30 µA` | `[ ]` |
 | **CHK-07** | Wireless node screen on / manual off / auto-off | Wakes, toggles off, or times out cleanly | `[ ]` |
 | **CHK-08** | Wireless range test at final room location | Reliable `[LINK OK]` & RSSI `> -85 dBm` | `[ ]` |
+| **CHK-09** | 3-sec `BACK` AP toggle & Captive Portal | `AP: 192.168.4.1` toggles ON/OFF & verifies Wi-Fi live | `[ ]` |
+

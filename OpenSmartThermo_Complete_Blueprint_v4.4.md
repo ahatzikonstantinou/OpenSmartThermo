@@ -90,6 +90,12 @@ ESP32 hardware shares a single 2.4 GHz radio between Wi-Fi and ESP-NOW. Therefor
 3. The wireless node saves `hub_mac` and `wifi_channel` into **RTC Slow Memory** (preserved across deep sleep) and **NVS Flash** (preserved across battery changes).
 4. If the home router later changes its Wi-Fi channel, a wireless node that fails to receive an ESP-NOW ACK after 3 retries performs a fast channel scan (`1–13`), rediscovers the thermostat, updates its stored `wifi_channel`, and resumes normal operation automatically.
 
+### 2.3 On-Demand Setup Access Point (`OpenSmartThermo-Setup`) & DNS Captive Portal:
+  * On first boot (when no Wi-Fi SSID is stored in NVS) or if the Hub fails to connect to the configured home router within **20 seconds**, the ESP32-S3 automatically launches an open `WIFI_AP_STA` hotspot named **`OpenSmartThermo-Setup`** (`192.168.4.1`) for **10 minutes** (`600s`) and starts an integrated **`DNSServer`** wildcard responder (`*` -> `192.168.4.1`) so Android, iOS, and Windows devices automatically pop up the full Web SPA without manual IP entry.
+  * If a configured home router temporarily drops (e.g., after a power outage), the Hub retries station connection every **30 minutes** (`1800s`) and re-opens the 10-minute Setup AP fallback if reconnection fails, preventing user lockout.
+  * When credentials are submitted via `POST /api/v1/wifi`, the Hub tests the router connection live in **`WIFI_AP_STA` mode** for up to **12 seconds** before shutting down the Setup AP. If the password is incorrect, the Setup AP remains active and returns an immediate error message; if successful, it returns the assigned LAN IP address and closes the Setup AP gracefully after **5 seconds**.
+
+
 ---
 
 ## 3. Hardware Design — Thermostat & Hub (ESP32-S3)
@@ -339,25 +345,26 @@ Users can select how indoor control temperature `T_control` is computed from act
 
 ### 7.2 ESP-NOW Binary Packet Definitions (`__attribute__((packed))`)
 ```cpp
-// Telemetry Packet: Wireless Sensor (Seeed Studio XIAO ESP32C3) -> Thermostat Hub (ESP32-S3)
+// Telemetry & Pairing Packet: Wireless Sensor (Seeed Studio XIAO ESP32C3) -> Thermostat Hub (ESP32-S3)
 typedef struct __attribute__((packed)) {
-    uint8_t  msg_type;        // 0x01 = TELEMETRY, 0x02 = PAIR_REQUEST
-    uint8_t  sensor_id;       // 0xFF if unpaired, 1..15 if paired
-    uint8_t  mac[6];          // Sender STA MAC address
-    int16_t  temp_x100;       // Temperature in 0.01 C (e.g., 2145 = 21.45 C)
-    uint16_t hum_x100;        // Humidity in 0.01 %RH (e.g., 5420 = 54.20 %)
-    uint16_t vbat_mv;         // Battery voltage in mV (e.g., 3050 = 3.05 V)
-    uint8_t  wake_reason;     // 0 = Timer, 1 = Physical Button Short Press, 2 = Long Press Pair
-    uint32_t seq_num;         // Monotonic packet counter
+    uint8_t  msg_type;          // 0x01 = TELEMETRY, 0x02 = PAIR_REQUEST
+    uint8_t  sensor_id;         // 0xFF if unpaired, 1..15 if paired
+    uint8_t  mac[6];            // Sender STA MAC address
+    float    temp_c;            // Temperature in degrees Celsius (e.g., 21.45)
+    float    humidity_pct;      // Relative humidity in %RH (e.g., 54.20)
+    uint16_t batt_mv;           // Battery voltage in mV (e.g., 3050 = 3.05 V)
+    uint8_t  batt_pct;          // Battery remaining percentage (0..100 %)
+    uint8_t  wake_reason;       // 0 = Timer, 1 = Short Button Press, 2 = Long Press Pair
+    uint32_t seq_num;           // Monotonic packet sequence counter
 } espnow_sensor_packet_t;
 
-// ACK / Config Piggyback Packet: Thermostat Hub -> Wireless Sensor
+// ACK / Config Piggyback Packet: Thermostat Hub (ESP32-S3) -> Wireless Sensor (Seeed Studio XIAO ESP32C3)
 typedef struct __attribute__((packed)) {
     uint8_t  msg_type;          // 0x81 = TELEMETRY_ACK, 0x82 = PAIR_ACCEPT
     uint8_t  assigned_id;       // Assigned Sensor ID (1..15)
     uint8_t  wifi_channel;      // Current Hub Wi-Fi channel (1..13)
     uint16_t report_interval;   // Sleep duration in seconds (default 300)
-    int16_t  temp_offset_x100;  // Calibration offset in 0.01 C
+    float    temp_offset;       // Calibration offset in degrees Celsius (e.g., -0.20)
     char     sensor_name[25];   // Null-terminated custom sensor name (up to 24 chars; auto-scrolls on node LCD if > 21 chars)
     char     hub_name[25];      // Null-terminated thermostat hub name (up to 24 chars; auto-scrolls on node LCD if > 6 chars)
     uint8_t  display_timeout_s; // On-node I2C screen auto-off timeout in seconds (5..10s, default 8s)
@@ -402,7 +409,7 @@ Served directly from `ESP32-S3` LittleFS flash at `http://opensmartthermo.local`
    * **Outdoor Weather Rules:** Toggle `Warm-Weather Lockout` + threshold slider (`10°C–25°C`), and toggle `Cold-Weather Compensation` + slope factor.
    * **Safety Toggles:** Frost Protection (`5°C–10°C`), Open Window Detection, Sensor Timeout Fallback, Summer Pump Exercise.
 5. **Page 5: Network & Integrations (`/network`)**
-   * **Wi-Fi Setup:** Scan nearby SSIDs, enter password, configure static IP or DHCP, set mDNS hostname.
+   * **Wi-Fi Setup & Captive Portal Provisioning:** Supports both initial provisioning over the **`OpenSmartThermo-Setup`** Captive Portal (`192.168.4.1`) and LAN reconfiguration. Submitting Wi-Fi credentials performs a live non-destructive connection test in `WIFI_AP_STA` mode, displaying immediate feedback (`Connected! IP: x.x.x.x` or `Connection failed. Check password.`) via toast notification before closing the Setup AP.
    * **MQTT & Home Assistant:** Enable/disable MQTT, broker host/port, username/password, base topic, and toggle `Home Assistant Auto-Discovery`.
    * **System Time & RTC:** View `DS3231` hardware RTC time, NTP server, timezone POSIX string, and `Sync RTC Now` button.
 6. **Page 6: System, Logs & Firmware (`/system`)**
@@ -636,7 +643,10 @@ Updates Wi-Fi credentials and triggers reconnection.
   "dhcp": true
 }
 ```
-* **Response (`200 OK`):** `{"status": "ok", "message": "Wi-Fi credentials saved. Reconnecting in 2 seconds."}`
+* **Response (`200 OK` — Connected):**
+  `{"status": "ok", "connected": true, "ip": "192.168.1.145", "message": "Connected! IP: 192.168.1.145"}` *(Schedules Setup AP shutdown after 5 seconds).*
+* **Response (`200 OK` — Failed):**
+  `{"status": "error", "connected": false, "message": "Connection failed. Check password."}` *(Keeps Setup AP active).*
 
 ---
 
@@ -693,7 +703,7 @@ On MQTT connection, the thermostat automatically publishes retained discovery co
 * **`UP`:** Increase value / move cursor up / previous item.
 * **`DOWN`:** Decrease value / move cursor down / next item.
 * **`OK`:** Confirm selection / enter submenu / cycle mode (`AUTO` -> `MANUAL` -> `BOOST` -> `OFF`).
-* **`BACK`:** Immediate cancel / return to parent menu / exit Pairing or Wi-Fi Setup back to Home Screen (`Screen 0`).
+* **`BACK`:** Short press cancels/returns to parent menu or exits Pairing/Wi-Fi Setup back to Home Screen (`Screen 0`). Long press (`>= 3s`) on `Screen 0` toggles the **`OpenSmartThermo-Setup`** Wi-Fi AP (`192.168.4.1`) ON for 10 minutes (or OFF if already active)..
 
 ### 11.2 Complete 128x64 Pixel Screen Layouts (ASCII Wireframes)
 
@@ -713,7 +723,9 @@ On MQTT connection, the thermostat automatically publishes retained discovery co
   * `UP` / `DOWN`: Adjust `Target Temp` by `±0.5°C` (switches to `MANUAL` if in `AUTO`, or adjusts `BOOST` temp).
   * `OK` (Short Press): Cycles `System Mode` (`AUTO` -> `MANUAL` -> `BOOST` -> `OFF`).
   * `OK` (Long Press 1.5s): Opens **Main Menu (`Screen 1`)**.
-  * `BACK`: Wakes LCD backlight for 15s (or activates `BOOST` if pressed twice quickly).
+  * `BACK`: 
+    * **Short Press:** Wakes LCD backlight for 15s (or activates `BOOST` if pressed twice quickly).
+    * **Long Press (`>= 3s`):** Toggles the **`OpenSmartThermo-Setup`** Wi-Fi Access Point (`192.168.4.1`) ON for **10 minutes** (or OFF if already active). While active, the top-left status bar displays **`AP: 192.168.4.1`**.
 
 #### Screen 1: Main Menu
 ```
@@ -826,10 +838,10 @@ On MQTT connection, the thermostat automatically publishes retained discovery co
 4. **Snap Front Panel & Restore Power:** The LCD illuminates, displays the boot splash screen, and enters Home Screen (`Screen 0`).
 
 ### 12.2 Initial Wi-Fi & Browser Setup
-1. On first boot (or via `Main Menu -> 6. Wi-Fi & Network Info -> Start Wi-Fi Setup AP`), the thermostat creates an open Wi-Fi hotspot named **`OpenSmartThermo-Setup`**.
-2. Connect with your smartphone or laptop and browse to **`http://192.168.4.1`**.
-3. Select your home Wi-Fi network, enter the password, and click **Save & Connect**.
-4. Once connected, access the full Web Interface anytime from any browser on your network at **`http://opensmartthermo.local`** (or the IP address shown on LCD `Screen 7`).
+1. **Connect to the Setup Hotspot:** On first power-up (or by holding the **`BACK`** button on the wall thermostat for **3 seconds** until the top-left status bar displays **`AP: 192.168.4.1`**, or via `Main Menu -> 6. Wi-Fi & Network Info -> Start Wi-Fi Setup AP`), connect your smartphone or laptop to the **`OpenSmartThermo-Setup`** Wi-Fi network.
+2. **Automatic Captive Portal:** Your phone will automatically open the OpenSmartThermo interface (if not, browse to **`http://192.168.4.1`**). You can configure all thermostat schedules, sensors, and settings immediately—even in a home with **no Wi-Fi router or internet**.
+3. **Join Home Wi-Fi:** Open the **Network** tab, enter your home Wi-Fi name and password, and click **Save & Connect**. The thermostat verifies the password live, displays its new local IP address on your phone, and closes the setup hotspot 5 seconds later.
+4. **LAN Access:** Once connected, access the full Web Interface anytime from any browser on your network at **`http://opensmartthermo.local`** (or the IP address shown on LCD `Screen 7`).
 
 ### 12.3 Pairing, Naming & Assigning Roles to Wireless Thermometers
 1. **Insert Batteries:** Install `2x AA` batteries into the wireless thermometer (wired directly to the `3V3` and `GND` pins on the Seeed Studio XIAO ESP32C3).
